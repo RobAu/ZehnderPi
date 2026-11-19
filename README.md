@@ -73,6 +73,68 @@ powered on.
 The pairing (network address and device IDs) is saved in `zehnder.json` next
 to the script. That file is specific to one fan and is not kept in git.
 
+## HTTP API
+
+`./zehnder.py serve` keeps the radio open and offers a small JSON API on port
+8765. It has no authentication, so anyone on the network can change the fan
+speed.
+
+| Request                          | Effect                                         |
+|----------------------------------|------------------------------------------------|
+| `GET /`                          | Name, fan ID and the list of speeds            |
+| `GET /status`                    | Current speed, power (%) and timer state       |
+| `POST /speed/<speed>`            | Set the speed: auto, low, medium, high or max  |
+| `POST /timer/<speed>/<minutes>`  | Run a speed for 1 to 255 minutes               |
+
+Example:
+
+```
+curl http://raspberrypi.local:8765/status
+curl -X POST http://raspberrypi.local:8765/speed/high
+```
+
+`/status` answers from memory when the last report from the fan is less than
+30 seconds old, and asks the fan otherwise; `?max_age=0` always asks. The
+service also picks up the settings the fan reports to other remotes. If the
+fan does not answer, the API returns status 502.
+
+While the service runs it owns the radio, so the other `zehnder.py` commands
+refuse to start. Use the API, or stop the service first.
+
+### Running as a service
+
+`zehnder.service` is a systemd user service; it expects the repository in
+`~/ventilatie`.
+
+```
+mkdir -p ~/.config/systemd/user
+cp zehnder.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now zehnder.service
+loginctl enable-linger        # start at boot, without logging in
+```
+
+Logs: `journalctl --user -u zehnder`. Stop it with
+`systemctl --user stop zehnder`.
+
+## Home Assistant
+
+`custom_components/zehnder_comfofan` is a small Home Assistant integration
+that talks to the HTTP API. It adds one device, "Zehnder ComfoFan", with:
+
+- buttons for low, medium, high and timer (high for 10 minutes), like the
+  original remote
+- a speed sensor, refreshed every 30 seconds, with power and timer state as
+  attributes
+
+To install it:
+
+1. Copy the `custom_components/zehnder_comfofan` folder into the
+   `custom_components` folder of your Home Assistant configuration.
+2. Restart Home Assistant.
+3. Go to Settings > Devices & services > Add integration, search for
+   "Zehnder ComfoFan", and enter the address of the Pi and port 8765.
+
 ## Troubleshooting
 
 `./zehnder.py info` reads the radio's configuration register. A freshly

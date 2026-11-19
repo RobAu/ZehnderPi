@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Zehnder ComfoFan",
+        "description": "Address of the Raspberry Pi that runs the Zehnder API service.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the Zehnder API at that address."
+    },
+    "abort": {
+      "already_configured": "This fan is already set up."
+    }
+  }
+}

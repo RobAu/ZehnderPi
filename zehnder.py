@@ -20,15 +20,23 @@ Usage:
   ./zehnder.py status               ask the fan for its current settings
   ./zehnder.py speed low|medium|high|max|auto
   ./zehnder.py timer high 30        run a speed for a number of minutes
+  ./zehnder.py serve                run the HTTP API (see README)
+
+While the HTTP API service is running it owns the radio, so the other
+commands that use the radio will refuse to start; use the API instead.
 """
 
 import argparse
 import datetime
+import http.server
 import json
 import pathlib
 import random
+import signal
 import sys
+import threading
 import time
+import urllib.parse
 
 import lgpio
 import spidev
@@ -68,6 +76,8 @@ CMD_QUERY_NETWORK = 0x0D
 CMD_QUERY_DEVICE = 0x10
 
 CONFIG_FILE = pathlib.Path(__file__).with_name("zehnder.json")
+DEFAULT_PORT = 8765
+STATUS_MAX_AGE = 30.0       # seconds before /status asks the fan again
 
 DEVICE_TYPES = {
     0x00: "broadcast",
@@ -208,8 +218,16 @@ def describe(payload: bytes) -> str:
     return text
 
 
+def open_radio() -> Radio:
+    try:
+        return Radio()
+    except lgpio.error as error:
+        sys.exit(f"Cannot use the radio pins ({error}). If the HTTP API service is "
+                 "running it owns the radio: use the API, or stop the service first.")
+
+
 def cmd_info(_args):
-    radio = Radio()
+    radio = open_radio()
     try:
         config = radio.read_config()
     finally:
@@ -283,7 +301,7 @@ def cmd_listen(args):
             log.write(line + "\n")
             log.flush()
 
-    radio = Radio()
+    radio = open_radio()
     count = 0
     try:
         radio.configure(address)
@@ -313,7 +331,7 @@ def cmd_pair(args):
     if CONFIG_FILE.exists() and not args.force:
         sys.exit(f"Already paired ({CONFIG_FILE}). Use 'pair --force' to pair again.")
     link = bytes.fromhex(LINK_ADDRESS)
-    radio = Radio()
+    radio = open_radio()
     try:
         # 1. Announce ourselves on the link address and wait for the fan unit's
         #    "open for linking" frame, which carries its network address.
@@ -360,19 +378,24 @@ def cmd_pair(args):
         radio.close()
 
 
+def send_to_fan(radio, pairing, payload, verbose=False):
+    """Send a command on an open radio and return the fan's settings frame."""
+    answer = exchange(radio, payload, settings_for(pairing), verbose=verbose)
+    if answer is not None and payload[5] in (CMD_SET_SPEED, CMD_SET_TIMER):
+        # The original remote confirms the fan's answer; do the same.
+        radio.transmit(frame(pairing["fan_type"], pairing["fan_id"], pairing["my_type"],
+                             pairing["my_id"], CMD_SET_SPEED_REPLY, b"\x54\x03\x20"))
+        time.sleep(0.02)
+    return answer
+
+
 def run_command(pairing, payload, verbose):
-    """Send a command to the paired fan and return its settings frame."""
-    radio = Radio()
+    """Open the radio, send one command to the paired fan, close the radio."""
+    radio = open_radio()
     try:
         radio.set_address(bytes.fromhex(pairing["network"]))
         radio.start_receiving()
-        answer = exchange(radio, payload, settings_for(pairing), verbose=verbose)
-        if answer is not None and payload[5] in (CMD_SET_SPEED, CMD_SET_TIMER):
-            # The original remote confirms the fan's answer; do the same.
-            radio.transmit(frame(pairing["fan_type"], pairing["fan_id"], pairing["my_type"],
-                                 pairing["my_id"], CMD_SET_SPEED_REPLY, b"\x54\x03\x20"))
-            time.sleep(0.02)
-        return answer
+        return send_to_fan(radio, pairing, payload, verbose)
     finally:
         radio.close()
 
@@ -407,6 +430,139 @@ def cmd_timer(args):
     finish(run_command(pairing, to_fan(pairing, CMD_SET_TIMER, params), args.verbose))
 
 
+class FanService:
+    """Keeps the radio open and the last known fan settings up to date."""
+
+    def __init__(self, pairing, verbose=False):
+        self.pairing = pairing
+        self.verbose = verbose
+        self.lock = threading.Lock()   # guards the radio
+        self.settings = None
+        self.updated = 0.0
+        self.stopping = False
+        self.radio = open_radio()
+        self.radio.set_address(bytes.fromhex(pairing["network"]))
+        self.radio.start_receiving()
+
+    def close(self):
+        self.stopping = True
+        with self.lock:
+            self.radio.close()
+
+    def remember(self, payload):
+        speed = payload[7]
+        self.settings = {"speed": SPEEDS.get(speed, str(speed)), "speed_value": speed,
+                         "power": payload[8], "timer": bool(payload[9])}
+        self.updated = time.time()
+
+    def snapshot(self):
+        return {**self.settings, "age": round(time.time() - self.updated, 1)}
+
+    def command(self, command, params=b""):
+        """Send a command to the fan. Returns the settings, or None if it stays silent."""
+        with self.lock:
+            answer = send_to_fan(self.radio, self.pairing,
+                                 to_fan(self.pairing, command, params), self.verbose)
+        if answer is None:
+            return None
+        self.remember(answer)
+        return self.snapshot()
+
+    def status(self, max_age):
+        if self.settings is None or time.time() - self.updated > max_age:
+            return self.command(CMD_QUERY_DEVICE)
+        return self.snapshot()
+
+    def watch(self):
+        """Pick up settings the fan reports to other remotes."""
+        fan = bytes([self.pairing["fan_type"], self.pairing["fan_id"]])
+        while not self.stopping:
+            with self.lock:
+                payload = None if self.stopping else self.radio.receive()
+            if (payload and payload[5] == CMD_FAN_SETTINGS and payload[2:4] == fan
+                    and payload[6] >= 3):
+                self.remember(payload)
+            time.sleep(0.01)
+
+
+def make_handler(service):
+    pairing = service.pairing
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        server_version = "zehnder"
+
+        def reply(self, code, body):
+            data = (json.dumps(body) + "\n").encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def fan_reply(self, settings):
+            if settings is None:
+                self.reply(502, {"error": "the fan did not answer"})
+            else:
+                self.reply(200, settings)
+
+        def do_GET(self):
+            url = urllib.parse.urlsplit(self.path)
+            if url.path == "/":
+                self.reply(200, {
+                    "name": "Zehnder ComfoFan",
+                    "id": f"{pairing['network']}-{pairing['fan_id']:02X}",
+                    "speeds": list(SPEED_BY_NAME),
+                    "endpoints": ["GET /status", "POST /speed/<speed>",
+                                  "POST /timer/<speed>/<minutes>"],
+                })
+            elif url.path == "/status":
+                query = urllib.parse.parse_qs(url.query)
+                try:
+                    max_age = float(query.get("max_age", [STATUS_MAX_AGE])[0])
+                except ValueError:
+                    return self.reply(400, {"error": "max_age must be a number of seconds"})
+                self.fan_reply(service.status(max_age))
+            else:
+                self.reply(404, {"error": "unknown path"})
+
+        def do_POST(self):
+            parts = urllib.parse.urlsplit(self.path).path.strip("/").split("/")
+            if parts[0] not in ("speed", "timer"):
+                return self.reply(404, {"error": "unknown path"})
+            if len(parts) < 2 or parts[1] not in SPEED_BY_NAME:
+                return self.reply(400, {"error": "speed must be one of " + ", ".join(SPEED_BY_NAME)})
+            speed = SPEED_BY_NAME[parts[1]]
+            if parts[0] == "speed" and len(parts) == 2:
+                self.fan_reply(service.command(CMD_SET_SPEED, bytes([speed])))
+            elif parts[0] == "timer" and len(parts) == 3 and parts[2].isdigit() \
+                    and 1 <= int(parts[2]) <= 255:
+                self.fan_reply(service.command(CMD_SET_TIMER, bytes([speed, int(parts[2])])))
+            else:
+                self.reply(400, {"error": "use /speed/<speed> or /timer/<speed>/<minutes 1-255>"})
+
+    return Handler
+
+
+def cmd_serve(args):
+    service = FanService(load_pairing(), args.verbose)
+    server = http.server.ThreadingHTTPServer((args.host, args.port), make_handler(service))
+    server.daemon_threads = True
+
+    def stop(*_):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stop)
+    threading.Thread(target=service.watch, daemon=True).start()
+    print(f"Zehnder API listening on http://{args.host}:{args.port}", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        service.close()
+        server.server_close()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Zehnder ComfoFan RF tool (nRF905)")
     parser.add_argument("-v", "--verbose", action="store_true",
@@ -438,6 +594,11 @@ def main():
     timer.add_argument("speed", choices=list(SPEED_BY_NAME))
     timer.add_argument("minutes", type=int)
     timer.set_defaults(func=cmd_timer)
+
+    serve = sub.add_parser("serve", help="run the HTTP API")
+    serve.add_argument("--host", default="0.0.0.0", help="address to listen on (default: all)")
+    serve.add_argument("--port", type=int, default=DEFAULT_PORT, help="default: %(default)s")
+    serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args()
     args.func(args)
