@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 660" width="1060" height="660" font-family="DejaVu Sans, Arial, sans-serif">
+<rect width="1060" height="660" fill="#f6f3ec"/>
+<text x="530" y="40" text-anchor="middle" font-size="24" font-weight="bold" fill="#222">nRF905 module header (2 × 7)</text>
+<text x="530" y="66" text-anchor="middle" font-size="14" fill="#555">Pins as labelled on the common nRF905 breakout · pin 1 = VCC · each wire goes to the Raspberry Pi pin shown</text>
+<rect x="430" y="100" width="200" height="458" rx="14" fill="#2e7d4f" stroke="#1d5435" stroke-width="3"/>
+<text x="530" y="126" text-anchor="middle" font-size="13" font-weight="bold" fill="#eaf5ee">nRF905 module</text>
+<rect x="472" y="140" width="116" height="408" rx="6" fill="#161616"/>
+<line x1="500" y1="170" x2="360" y2="170" stroke="#111" stroke-width="9" stroke-linecap="round"/>
+<line x1="500" y1="170" x2="360" y2="170" stroke="#d62828" stroke-width="6" stroke-linecap="round"/>
+<rect x="260" y="155" width="100" height="30" rx="6" fill="#d62828" stroke="#111" stroke-width="1.5"/>
+<text x="310" y="175" text-anchor="middle" font-size="14" font-weight="bold" fill="#fff">VCC</text>
+<circle cx="500" cy="170" r="14" fill="#d62828" stroke="#fff" stroke-width="2.5"/>
+<text x="500" y="174" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">1</text>
+<text x="250" y="175" text-anchor="end" font-size="12" font-style="italic" fill="#444">red → Pi pin 1 · 3.3 V</text>
+<line x1="500" y1="228" x2="360" y2="228" stroke="#111" stroke-width="9" stroke-linecap="round"/>
+<line x1="500" y1="228" x2="360" y2="228" stroke="#6a3fb5" stroke-width="6" stroke-linecap="round"/>
+<rect x="260" y="213" width="100" height="30" rx="6" fill="#6a3fb5" stroke="#111" stroke-width="1.5"/>
+<text x="310" y="233" text-anchor="middle" font-size="14" font-weight="bold" fill="#fff">TRX_CE</text>
+<circle cx="500" cy="228" r="14" fill="#6a3fb5" stroke="#fff" stroke-width="2.5"/>
+<text x="500" y="232" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">3</text>
+<text x="250" y="233" text-anchor="end" font-size="12" font-style="italic" fill="#444">purple → Pi pin 22 · GPIO25</text>
+<rect x="260" y="271" width="100" height="30" rx="6" fill="none" stroke="#999" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="310" y="291" text-anchor="middle" font-size="14" fill="#777">uCLK</text>
+<circle cx="500" cy="286" r="12" fill="#3a3a3a" stroke="#c9a227" stroke-width="2"/>
+<text x="500" y="290" text-anchor="middle" font-size="10" fill="#bbb">5</text>
+<text x="250" y="291" text-anchor="end" font-size="12" font-style="italic" fill="#444">not connected</text>
+<rect x="260" y="329" width="100" height="30" rx="6" fill="none" stroke="#999" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="310" y="349" text-anchor="middle" font-size="14" fill="#777">AM</text>
+<circle cx="500" cy="344" r="12" fill="#3a3a3a" stroke="#c9a227" stroke-width="2"/>
+<text x="500" y="348" text-anchor="middle" font-size="10" fill="#bbb">7</text>
+<text x="250" y="349" text-anchor="end" font-size="12" font-style="italic" fill="#444">not connected</text>
+<line x1="500" y1="402" x2="360" y2="402" stroke="#111" stroke-width="9" stroke-linecap="round"/>
+<line x1="500" y1="402" x2="360" y2="402" stroke="#1f8a45" stroke-width="6" stroke-linecap="round"/>
+<rect x="260" y="387" width="100" height="30" rx="6" fill="#1f8a45" stroke="#111" stroke-width="1.5"/>
+<text x="310" y="407" text-anchor="middle" font-size="14" font-weight="bold" fill="#fff">MISO</text>
+<circle cx="500" cy="402" r="14" fill="#1f8a45" stroke="#fff" stroke-width="2.5"/>
+<text x="500" y="406" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">9</text>
+<text x="250" y="407" text-anchor="end" font-size="12" font-style="italic" fill="#444">green → Pi pin 21 · GPIO9</text>
+<line x1="500" y1="460" x2="360" y2="460" stroke="#111" stroke-width="9" stroke-linecap="round"/>
+<line x1="500" y1="460" x2="360" y2="460" stroke="#f07c1c" stroke-width="6" stroke-linecap="round"/>
+<rect x="260" y="445" width="100" height="30" rx="6" fill="#f07c1c" stroke="#111" stroke-width="1.5"/>
+<text x="310" y="465" text-anchor="middle" font-size="14" font-weight="bold" fill="#fff">SCK</text>
+<circle cx="500" cy="460" r="14" fill="#f07c1c" stroke="#fff" stroke-width="2.5"/>
+<text x="500" y="464" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">11</text>
+<text x="250" y="465" text-anchor="end" font-size="12" font-style="italic" fill="#444">orange → Pi pin 23 · GPIO11</text>
+<line x1="500" y1="518" x2="360" y2="518" stroke="#111" stroke-width="9" stroke-linecap="round"/>
+<line x1="500" y1="518" x2="360" y2="518" stroke="#1a1a1a" stroke-width="6" stroke-linecap="round"/>
+<rect x="260" y="503" width="100" height="30" rx="6" fill="#1a1a1a" stroke="#111" stroke-width="1.5"/>
+<text x="310" y="523" text-anchor="middle" font-size="14" font-weight="bold" fill="#fff">GND</text>
+<circle cx="500" cy="518" r="14" fill="#1a1a1a" stroke="#fff" stroke-width="2.5"/>
+<text x="500" y="522" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">13</text>
+<text x="250" y="523" text-anchor="end" font-size="12" font-style="italic" fill="#444">black → Pi pin 6 · GND</text>
+<line x1="560" y1="170" x2="700" y2="170" stroke="#111" stroke-width="9" stroke-linecap="round"/>
+<line x1="560" y1="170" x2="700" y2="170" stroke="#7a4a21" stroke-width="6" stroke-linecap="round"/>
+<rect x="700" y="155" width="100" height="30" rx="6" fill="#7a4a21" stroke="#111" stroke-width="1.5"/>
+<text x="750" y="175" text-anchor="middle" font-size="14" font-weight="bold" fill="#fff">TX_EN</text>
+<circle cx="560" cy="170" r="14" fill="#7a4a21" stroke="#fff" stroke-width="2.5"/>
+<text x="560" y="174" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">2</text>
+<text x="810" y="175" text-anchor="start" font-size="12" font-style="italic" fill="#444">brown → Pi pin 18 · GPIO24</text>
+<line x1="560" y1="228" x2="700" y2="228" stroke="#111" stroke-width="9" stroke-linecap="round"/>
+<line x1="560" y1="228" x2="700" y2="228" stroke="#ffffff" stroke-width="6" stroke-linecap="round"/>
+<rect x="700" y="213" width="100" height="30" rx="6" fill="#ffffff" stroke="#111" stroke-width="1.5"/>
+<text x="750" y="233" text-anchor="middle" font-size="14" font-weight="bold" fill="#111">PWR_UP</text>
+<circle cx="560" cy="228" r="14" fill="#ffffff" stroke="#111" stroke-width="2.5"/>
+<text x="560" y="232" text-anchor="middle" font-size="11" font-weight="bold" fill="#111">4</text>
+<text x="810" y="233" text-anchor="start" font-size="12" font-style="italic" fill="#444">white → Pi pin 16 · GPIO23</text>
+<rect x="700" y="271" width="100" height="30" rx="6" fill="none" stroke="#999" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="750" y="291" text-anchor="middle" font-size="14" fill="#777">CD</text>
+<circle cx="560" cy="286" r="12" fill="#3a3a3a" stroke="#c9a227" stroke-width="2"/>
+<text x="560" y="290" text-anchor="middle" font-size="10" fill="#bbb">6</text>
+<text x="810" y="291" text-anchor="start" font-size="12" font-style="italic" fill="#444">not connected</text>
+<line x1="560" y1="344" x2="700" y2="344" stroke="#111" stroke-width="9" stroke-linecap="round"/>
+<line x1="560" y1="344" x2="700" y2="344" stroke="#8e9196" stroke-width="6" stroke-linecap="round"/>
+<rect x="700" y="329" width="100" height="30" rx="6" fill="#8e9196" stroke="#111" stroke-width="1.5"/>
+<text x="750" y="349" text-anchor="middle" font-size="14" font-weight="bold" fill="#fff">DR</text>
+<circle cx="560" cy="344" r="14" fill="#8e9196" stroke="#fff" stroke-width="2.5"/>
+<text x="560" y="348" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">8</text>
+<text x="810" y="349" text-anchor="start" font-size="12" font-style="italic" fill="#444">grey → Pi pin 15 · GPIO22</text>
+<line x1="560" y1="402" x2="700" y2="402" stroke="#111" stroke-width="9" stroke-linecap="round"/>
+<line x1="560" y1="402" x2="700" y2="402" stroke="#f2d21b" stroke-width="6" stroke-linecap="round"/>
+<rect x="700" y="387" width="100" height="30" rx="6" fill="#f2d21b" stroke="#111" stroke-width="1.5"/>
+<text x="750" y="407" text-anchor="middle" font-size="14" font-weight="bold" fill="#111">MOSI</text>
+<circle cx="560" cy="402" r="14" fill="#f2d21b" stroke="#111" stroke-width="2.5"/>
+<text x="560" y="406" text-anchor="middle" font-size="11" font-weight="bold" fill="#111">10</text>
+<text x="810" y="407" text-anchor="start" font-size="12" font-style="italic" fill="#444">yellow → Pi pin 19 · GPIO10</text>
+<line x1="560" y1="460" x2="700" y2="460" stroke="#111" stroke-width="9" stroke-linecap="round"/>
+<line x1="560" y1="460" x2="700" y2="460" stroke="#1d4fc4" stroke-width="6" stroke-linecap="round"/>
+<rect x="700" y="445" width="100" height="30" rx="6" fill="#1d4fc4" stroke="#111" stroke-width="1.5"/>
+<text x="750" y="465" text-anchor="middle" font-size="14" font-weight="bold" fill="#fff">CSN</text>
+<circle cx="560" cy="460" r="14" fill="#1d4fc4" stroke="#fff" stroke-width="2.5"/>
+<text x="560" y="464" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">12</text>
+<text x="810" y="465" text-anchor="start" font-size="12" font-style="italic" fill="#444">blue → Pi pin 24 · GPIO8 (CE0)</text>
+<rect x="700" y="503" width="100" height="30" rx="6" fill="none" stroke="#999" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="750" y="523" text-anchor="middle" font-size="14" fill="#777">GND</text>
+<circle cx="560" cy="518" r="12" fill="#3a3a3a" stroke="#c9a227" stroke-width="2"/>
+<text x="560" y="522" text-anchor="middle" font-size="10" fill="#bbb">14</text>
+<text x="810" y="523" text-anchor="start" font-size="12" font-style="italic" fill="#444">not connected</text>
+<text x="530" y="612" text-anchor="middle" font-size="14" fill="#222">Power the module from 3.3 V only (maximum 3.6 V). uCLK, AM, CD and the second GND pin are not used.</text>
+<text x="530" y="636" text-anchor="middle" font-size="13" fill="#555">Module layouts differ between makers: check the labels printed on your board before wiring.</text>
+</svg>

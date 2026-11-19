@@ -1,0 +1,4 @@
+__pycache__/
+zehnder.json
+capture*.txt
+err.txt

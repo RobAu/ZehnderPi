@@ -1,0 +1,447 @@
+#!/usr/bin/env python3
+"""Zehnder ComfoFan RF tool for a Raspberry Pi with an nRF905 module.
+
+Talks the Zehnder RF protocol (868.4 MHz, 16-byte payload, 4-byte address,
+CRC-16). It can listen, pair with the fan unit as an extra remote control,
+and then read and set the fan speed.
+
+Protocol references:
+  https://github.com/eelcohn/ZehnderComfoair
+  https://github.com/Sanderhuisman/ESPHome-Zehnder-RF
+
+Wiring (BCM numbers): SPI0 CE0 for SCK/MOSI/MISO/CSN, PWR_UP=23, TX_EN=24,
+TRX_CE=25, DR=22.
+
+Usage:
+  ./zehnder.py info                 check that the radio answers
+  ./zehnder.py listen               print frames on the link address (receive only)
+  ./zehnder.py listen -n            print frames on the paired network (receive only)
+  ./zehnder.py pair                 pair with the fan (within 10 min of powering it on)
+  ./zehnder.py status               ask the fan for its current settings
+  ./zehnder.py speed low|medium|high|max|auto
+  ./zehnder.py timer high 30        run a speed for a number of minutes
+"""
+
+import argparse
+import datetime
+import json
+import pathlib
+import random
+import sys
+import time
+
+import lgpio
+import spidev
+
+PIN_PWR_UP = 23
+PIN_TX_EN = 24
+PIN_TRX_CE = 25
+PIN_DR = 22
+
+# nRF905 SPI instructions
+W_CONFIG = 0x00
+R_CONFIG = 0x10
+W_TX_PAYLOAD = 0x20
+W_TX_ADDRESS = 0x22
+R_RX_PAYLOAD = 0x24
+
+# Zehnder radio settings
+CHANNEL = 118              # 868.4 MHz on the 868 MHz band
+PAYLOAD_LEN = 16
+LINK_ADDRESS = "A55A5AA5"  # address used while pairing
+TTL = 250
+REPLY_TIMEOUT = 1.0        # seconds to wait for an answer before sending again
+RETRIES = 10
+
+TYPE_FAN = 0x01
+TYPE_REMOTE = 0x03
+
+CMD_SET_SPEED = 0x02
+CMD_SET_TIMER = 0x03
+CMD_JOIN_REQUEST = 0x04
+CMD_SET_SPEED_REPLY = 0x05
+CMD_JOIN_OPEN = 0x06
+CMD_FAN_SETTINGS = 0x07
+CMD_LINK_OK = 0x0B
+CMD_REMOTE_LINKING = 0x0C
+CMD_QUERY_NETWORK = 0x0D
+CMD_QUERY_DEVICE = 0x10
+
+CONFIG_FILE = pathlib.Path(__file__).with_name("zehnder.json")
+
+DEVICE_TYPES = {
+    0x00: "broadcast",
+    0x01: "fan unit",
+    0x03: "RFZ remote",
+    0x16: "timer remote",
+    0x18: "CO2 sensor",
+}
+
+COMMANDS = {
+    0x01: "set voltage",
+    0x02: "set speed",
+    0x03: "set timer",
+    0x04: "join request",
+    0x05: "set speed reply",
+    0x06: "fan unit open for linking",
+    0x07: "fan settings",
+    0x0B: "link successful",
+    0x0C: "remote open for linking",
+    0x0D: "query network",
+    0x10: "query device",
+    0x1D: "set voltage reply",
+}
+
+SPEEDS = {0: "auto", 1: "low", 2: "medium", 3: "high", 4: "max"}
+SPEED_BY_NAME = {name: value for value, name in SPEEDS.items()}
+
+
+def build_config(address: bytes) -> list[int]:
+    """The 10-byte nRF905 configuration register for Zehnder reception."""
+    return [
+        CHANNEL & 0xFF,
+        0x02 | (0b11 << 2) | ((CHANNEL >> 8) & 1),  # 868 MHz band, +10 dBm
+        0x44,                                       # 4-byte RX and TX address
+        PAYLOAD_LEN,
+        PAYLOAD_LEN,
+        *address,
+        0xDB,                                       # CRC-16 on, 16 MHz crystal
+    ]
+
+
+class Radio:
+    def __init__(self):
+        self.spi = spidev.SpiDev()
+        self.spi.open(0, 0)
+        self.spi.mode = 0
+        self.spi.max_speed_hz = 1_000_000
+        self.chip = lgpio.gpiochip_open(0)
+        # Standby: powered up, not receiving, not transmitting.
+        lgpio.gpio_claim_output(self.chip, PIN_TX_EN, 0)
+        lgpio.gpio_claim_output(self.chip, PIN_TRX_CE, 0)
+        lgpio.gpio_claim_output(self.chip, PIN_PWR_UP, 1)
+        lgpio.gpio_claim_input(self.chip, PIN_DR)
+        time.sleep(0.01)
+
+    def close(self):
+        lgpio.gpio_write(self.chip, PIN_TRX_CE, 0)
+        lgpio.gpio_write(self.chip, PIN_PWR_UP, 0)
+        for pin in (PIN_TX_EN, PIN_TRX_CE, PIN_PWR_UP, PIN_DR):
+            lgpio.gpio_free(self.chip, pin)
+        lgpio.gpiochip_close(self.chip)
+        self.spi.close()
+
+    def read_config(self) -> list[int]:
+        return self.spi.xfer2([R_CONFIG] + [0] * 10)[1:]
+
+    def configure(self, address: bytes):
+        """Write the config in standby and verify it by reading it back."""
+        lgpio.gpio_write(self.chip, PIN_TRX_CE, 0)
+        wanted = build_config(address)
+        self.spi.xfer2([W_CONFIG] + wanted)
+        got = self.read_config()
+        if got != wanted:
+            raise RuntimeError(
+                "radio did not accept the configuration: wrote "
+                + bytes(wanted).hex(" ") + ", read back " + bytes(got).hex(" ")
+            )
+
+    def set_address(self, address: bytes):
+        """Use one address for both receiving and transmitting."""
+        self.configure(address)
+        self.spi.xfer2([W_TX_ADDRESS] + list(address))
+
+    def transmit(self, payload: bytes):
+        """Send one frame, then go back to receiving."""
+        lgpio.gpio_write(self.chip, PIN_TRX_CE, 0)
+        self.spi.xfer2([W_TX_PAYLOAD] + list(payload))
+        lgpio.gpio_write(self.chip, PIN_TX_EN, 1)
+        lgpio.gpio_write(self.chip, PIN_TRX_CE, 1)
+        deadline = time.monotonic() + 0.1
+        while not lgpio.gpio_read(self.chip, PIN_DR):
+            if time.monotonic() > deadline:
+                self.start_receiving()
+                raise RuntimeError("the radio did not finish transmitting")
+            time.sleep(0.0005)
+        lgpio.gpio_write(self.chip, PIN_TRX_CE, 0)
+        self.start_receiving()
+        time.sleep(0.002)
+
+    def start_receiving(self):
+        lgpio.gpio_write(self.chip, PIN_TX_EN, 0)
+        lgpio.gpio_write(self.chip, PIN_TRX_CE, 1)
+
+    def receive(self) -> bytes | None:
+        """Return a payload if one is waiting, otherwise None."""
+        if not lgpio.gpio_read(self.chip, PIN_DR):
+            return None
+        lgpio.gpio_write(self.chip, PIN_TRX_CE, 0)
+        payload = bytes(self.spi.xfer2([R_RX_PAYLOAD] + [0] * PAYLOAD_LEN)[1:])
+        lgpio.gpio_write(self.chip, PIN_TRX_CE, 1)
+        return payload
+
+
+def describe(payload: bytes) -> str:
+    rx_type, rx_id, tx_type, tx_id, ttl, command, count = payload[:7]
+    params = payload[7:7 + min(count, 9)]
+
+    def device(kind, ident):
+        return f"{DEVICE_TYPES.get(kind, f'type 0x{kind:02X}')} #{ident:02X}"
+
+    text = (
+        f"{device(tx_type, tx_id)} -> {device(rx_type, rx_id)}  ttl={ttl}  "
+        f"{COMMANDS.get(command, 'unknown command')} (0x{command:02X})"
+    )
+    if command == 0x02 and count >= 1:
+        text += f": {SPEEDS.get(params[0], params[0])}"
+    elif command == 0x03 and count >= 2:
+        text += f": {SPEEDS.get(params[0], params[0])} for {params[1]} min"
+    elif command == 0x07 and count >= 3:
+        text += (
+            f": speed {SPEEDS.get(params[0], params[0])}, {params[1]}% power, "
+            f"timer {'on' if params[2] else 'off'}"
+        )
+    elif command in (0x04, 0x06, 0x0C) and count >= 4:
+        text += f": network address bytes {params[:4].hex(' ').upper()}"
+    elif params:
+        text += f": params {params.hex(' ').upper()}"
+    return text
+
+
+def cmd_info(_args):
+    radio = Radio()
+    try:
+        config = radio.read_config()
+    finally:
+        radio.close()
+    print("nRF905 config register:", bytes(config).hex(" ").upper())
+    if all(b == 0x00 for b in config) or all(b == 0xFF for b in config):
+        sys.exit("The radio does not answer. Check the wiring.")
+    print("The radio answers.")
+
+
+def frame(rx_type, rx_id, tx_type, tx_id, command, params=b"") -> bytes:
+    head = bytes([rx_type, rx_id, tx_type, tx_id, TTL, command, len(params)])
+    return (head + bytes(params)).ljust(PAYLOAD_LEN, b"\x00")
+
+
+def exchange(radio, payload, accept, retries=RETRIES, verbose=False):
+    """Send a frame and wait for an answer that `accept` approves.
+
+    Sends again when no answer comes within REPLY_TIMEOUT. Returns the answer,
+    or None when every attempt went unanswered.
+    """
+    for _ in range(retries):
+        radio.transmit(payload)
+        if verbose:
+            print("  sent     ", describe(payload))
+        deadline = time.monotonic() + REPLY_TIMEOUT
+        while time.monotonic() < deadline:
+            answer = radio.receive()
+            if answer is None:
+                time.sleep(0.001)
+                continue
+            if verbose:
+                print("  received ", describe(answer))
+            if accept(answer):
+                return answer
+    return None
+
+
+def load_pairing() -> dict:
+    if not CONFIG_FILE.exists():
+        sys.exit(f"Not paired yet: {CONFIG_FILE} does not exist. Run './zehnder.py pair' first.")
+    return json.loads(CONFIG_FILE.read_text())
+
+
+def settings_for(pairing):
+    """Accept the fan's settings frame addressed to this remote."""
+    def accept(p):
+        return (p[5] == CMD_FAN_SETTINGS and p[0] == pairing["my_type"]
+                and p[1] == pairing["my_id"])
+    return accept
+
+
+def print_settings(payload):
+    speed, power, timer = payload[7], payload[8], payload[9]
+    print(f"Fan speed: {SPEEDS.get(speed, speed)}, power {power}%, "
+          f"timer {'on' if timer else 'off'}")
+
+
+def cmd_listen(args):
+    if args.network:
+        args.address = load_pairing()["network"]
+    address = bytes.fromhex(args.address)
+    if len(address) != 4:
+        sys.exit("The address must be 8 hex digits, for example A55A5AA5.")
+
+    log = open(args.log, "a") if args.log else None
+
+    def out(line):
+        print(line, flush=True)
+        if log:
+            log.write(line + "\n")
+            log.flush()
+
+    radio = Radio()
+    count = 0
+    try:
+        radio.configure(address)
+        radio.start_receiving()
+        out(f"Listening on 868.4 MHz, address {address.hex().upper()}. "
+            "Receive only. Ctrl-C to stop.")
+        started = time.monotonic()
+        while args.seconds is None or time.monotonic() - started < args.seconds:
+            payload = radio.receive()
+            if payload is None:
+                time.sleep(0.001)
+                continue
+            count += 1
+            stamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            out(f"{stamp}  {payload.hex(' ').upper()}")
+            out(f"              {describe(payload)}")
+        out(f"Stopped after {args.seconds} s, {count} frame(s) received.")
+    except KeyboardInterrupt:
+        out(f"Stopped, {count} frame(s) received.")
+    finally:
+        radio.close()
+        if log:
+            log.close()
+
+
+def cmd_pair(args):
+    if CONFIG_FILE.exists() and not args.force:
+        sys.exit(f"Already paired ({CONFIG_FILE}). Use 'pair --force' to pair again.")
+    link = bytes.fromhex(LINK_ADDRESS)
+    radio = Radio()
+    try:
+        # 1. Announce ourselves on the link address and wait for the fan unit's
+        #    "open for linking" frame, which carries its network address.
+        radio.set_address(link)
+        my_id = random.randint(1, 0xFE)
+        print("Looking for a fan unit that is open for linking...")
+        hello = frame(0x04, 0x00, TYPE_REMOTE, my_id, CMD_REMOTE_LINKING, link)
+        found = exchange(radio, hello, lambda p: p[5] == CMD_JOIN_OPEN and p[6] >= 4,
+                         verbose=args.verbose)
+        if found is None:
+            sys.exit("No fan unit answered. It is only open for linking during the "
+                     "first 10 minutes after it is powered on.")
+        fan_type, fan_id = found[2], found[3]
+        network = found[7:11]
+        while my_id == fan_id:
+            my_id = random.randint(1, 0xFE)
+        print(f"Found fan unit #{fan_id:02X} on network {network.hex().upper()}.")
+
+        # 2. Ask to join that network; the fan answers "link successful".
+        radio.set_address(network)
+        request = frame(fan_type, fan_id, TYPE_REMOTE, my_id, CMD_JOIN_REQUEST, network)
+        linked = exchange(
+            radio, request,
+            lambda p: p[5] == CMD_LINK_OK and p[:4] == bytes([TYPE_REMOTE, my_id, fan_type, fan_id]),
+            verbose=args.verbose)
+        if linked is None:
+            sys.exit("The fan unit did not accept the join request.")
+
+        pairing = {"network": network.hex().upper(), "my_type": TYPE_REMOTE,
+                   "my_id": my_id, "fan_type": fan_type, "fan_id": fan_id}
+        CONFIG_FILE.write_text(json.dumps(pairing, indent=2) + "\n")
+
+        # 3. Acknowledge; the fan closes the handshake with a network query.
+        ack = frame(fan_type, fan_id, TYPE_REMOTE, my_id, CMD_LINK_OK)
+        done = exchange(
+            radio, ack,
+            lambda p: p[5] == CMD_QUERY_NETWORK and p[2] == fan_type and p[3] == fan_id,
+            verbose=args.verbose)
+        print(f"Paired as remote #{my_id:02X}; saved to {CONFIG_FILE}.")
+        if done is None:
+            print("Note: the fan's final confirmation was not seen. "
+                  "Check with './zehnder.py status'.")
+    finally:
+        radio.close()
+
+
+def run_command(pairing, payload, verbose):
+    """Send a command to the paired fan and return its settings frame."""
+    radio = Radio()
+    try:
+        radio.set_address(bytes.fromhex(pairing["network"]))
+        radio.start_receiving()
+        answer = exchange(radio, payload, settings_for(pairing), verbose=verbose)
+        if answer is not None and payload[5] in (CMD_SET_SPEED, CMD_SET_TIMER):
+            # The original remote confirms the fan's answer; do the same.
+            radio.transmit(frame(pairing["fan_type"], pairing["fan_id"], pairing["my_type"],
+                                 pairing["my_id"], CMD_SET_SPEED_REPLY, b"\x54\x03\x20"))
+            time.sleep(0.02)
+        return answer
+    finally:
+        radio.close()
+
+
+def to_fan(pairing, command, params=b""):
+    return frame(pairing["fan_type"], pairing["fan_id"], pairing["my_type"],
+                 pairing["my_id"], command, params)
+
+
+def finish(answer):
+    if answer is None:
+        sys.exit("The fan did not answer.")
+    print_settings(answer)
+
+
+def cmd_status(args):
+    pairing = load_pairing()
+    finish(run_command(pairing, to_fan(pairing, CMD_QUERY_DEVICE), args.verbose))
+
+
+def cmd_speed(args):
+    pairing = load_pairing()
+    params = bytes([SPEED_BY_NAME[args.speed]])
+    finish(run_command(pairing, to_fan(pairing, CMD_SET_SPEED, params), args.verbose))
+
+
+def cmd_timer(args):
+    pairing = load_pairing()
+    if not 1 <= args.minutes <= 255:
+        sys.exit("Minutes must be between 1 and 255.")
+    params = bytes([SPEED_BY_NAME[args.speed], args.minutes])
+    finish(run_command(pairing, to_fan(pairing, CMD_SET_TIMER, params), args.verbose))
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Zehnder ComfoFan RF tool (nRF905)")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="show every frame sent and received")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("info", help="check that the radio answers").set_defaults(func=cmd_info)
+
+    listen = sub.add_parser("listen", help="print every Zehnder frame received")
+    listen.add_argument("-a", "--address", default=LINK_ADDRESS,
+                        help="4-byte address in hex (default: link address %(default)s)")
+    listen.add_argument("-n", "--network", action="store_true",
+                        help="listen on the paired network address")
+    listen.add_argument("-s", "--seconds", type=float, default=None,
+                        help="stop after this many seconds (default: run until Ctrl-C)")
+    listen.add_argument("-l", "--log", help="also append the output to this file")
+    listen.set_defaults(func=cmd_listen)
+
+    pair = sub.add_parser("pair", help="pair with a fan unit that was just powered on")
+    pair.add_argument("--force", action="store_true", help="replace an existing pairing")
+    pair.set_defaults(func=cmd_pair)
+
+    sub.add_parser("status", help="show the fan's current settings").set_defaults(func=cmd_status)
+
+    speed = sub.add_parser("speed", help="set the fan speed")
+    speed.add_argument("speed", choices=list(SPEED_BY_NAME))
+    speed.set_defaults(func=cmd_speed)
+
+    timer = sub.add_parser("timer", help="run a speed for a number of minutes")
+    timer.add_argument("speed", choices=list(SPEED_BY_NAME))
+    timer.add_argument("minutes", type=int)
+    timer.set_defaults(func=cmd_timer)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
